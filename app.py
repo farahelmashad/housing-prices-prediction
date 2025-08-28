@@ -1,10 +1,10 @@
 import dash
+import pandas as pd
 import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output
-import pandas as pd
 import plotly.express as px
 
-df = pd.read_csv('housing-prices-prediction/assets/Housing_cleaned.csv')
+df = pd.read_csv('assets/Housing_cleaned.csv')
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Housing Prices Dashboard"
@@ -144,41 +144,71 @@ main_content = dbc.Col([
             style={"fontFamily": "Segoe UI, Roboto, Helvetica, sans-serif",
                    "fontWeight": "bold",
                    "fontSize": "28px"}),
-
+    # Cards' Row
     dbc.Row([
         dbc.Col(dbc.Card([dbc.CardHeader("Average Price", className="fw-bold"),
                           dbc.CardBody(html.H5(id="avg-price", className="fw-bold"))]), width=3),
         dbc.Col(dbc.Card([dbc.CardHeader("Total Properties", className="fw-bold"),
                           dbc.CardBody(html.H5(id="total-properties", className="fw-bold"))]), width=3),
+        dbc.Col(dbc.Card([dbc.CardHeader("Luxury Houses %", className="fw-bold"),
+                          dbc.CardBody(html.H5(id="luxury-percent", className="fw-bold"))]), width=3)            
     ], className="mb-4", justify="center"),
 
     # Row 1
     dbc.Row([
         dbc.Col(dbc.Card(dcc.Graph(id="graph-price-area", figure={}, style={"height": "100%", "width": "100%"}), style={"height": "400px"}), width=6, className="mb-4"),
-        dbc.Col(dbc.Card(dcc.Graph(id="graph-furnishing-bar", figure={}, style={"height": "100%", "width": "100%"}), style={"height": "400px"}), width=6, className="mb-4"),
+        dbc.Col(
+            dbc.Card([
+                    dbc.CardHeader(
+                        dbc.Tabs([
+                                dbc.Tab(label="Avg Price", tab_id="tab-bar"),
+                                dbc.Tab(label="Distribution", tab_id="tab-pie"),
+                            ], id="furnishing-tabs", active_tab="tab-bar")
+                    ),
+                    dbc.CardBody(dcc.Graph(id="graph-furnishing", style={"height": "100%", "width": "100%"}))
+                ],
+                style={"height": "400px"}
+            ),
+            width=6, className="mb-4"
+        ),
     ]),
 
+    # Row 2
     dbc.Row([
-        dbc.Col(dbc.Card(dcc.Graph(id="graph-bathrooms-box", figure={}, style={"height": "100%", "width": "100%"}), style={"height": "350px"}), width=6, className="mb-4"),
+        dbc.Col(dbc.Card(dcc.Graph(id="graph-mainroad-bar", figure={}, style={"height": "100%", "width": "100%"}), style={"height": "350px"}), width=6, className="mb-4"),
         dbc.Col(dbc.Card(dcc.Graph(id="graph-bedrooms-box", figure={}, style={"height": "100%", "width": "100%"}), style={"height": "350px"}), width=6, className="mb-4"),
     ]),
 
+    #Row 3
     dbc.Row([
         dbc.Col(dbc.Card(dcc.Graph(id="graph-luxury-count", figure={}, style={"height": "100%", "width": "100%"}), style={"height": "400px"}), width=6, className="mb-4"),
         dbc.Col(dbc.Card(dcc.Graph(id="graph-price-per-area", figure={}, style={"height": "100%", "width": "100%"}), style={"height": "400px"}), width=6, className="mb-4"),
     ]),
+
+    # Row 4
+    dbc.Row([
+        dbc.Col(dbc.Card(dcc.Graph(id="graph-comfort", style={"height": "100%", "width": "100%"}), 
+                        style={"height": "400px"}), width=6, className="mb-4"),
+        dbc.Col(dbc.Card(dcc.Graph(id="graph-parking", style={"height": "100%", "width": "100%"}), 
+                        style={"height": "400px"}), width=6, className="mb-4"),
+    ]),
+
 ], width=9)
 
 @app.callback(
     [
         Output("avg-price", "children"),
         Output("total-properties", "children"),
+        Output("luxury-percent", "children"),
         Output("graph-price-area", "figure"),
-        Output("graph-furnishing-bar", "figure"),
-        Output("graph-bathrooms-box", "figure"),
+        Output("graph-furnishing", "figure"),
+        Output("graph-mainroad-bar", "figure"),
         Output("graph-bedrooms-box", "figure"),
         Output("graph-luxury-count", "figure"),
         Output("graph-price-per-area", "figure"),
+        Output("graph-comfort", "figure"),
+        Output("graph-parking", "figure"),
+
     ],
     [
         Input("price-slider", "value"),
@@ -191,10 +221,11 @@ main_content = dbc.Col([
         Input("guestroom-radio", "value"),
         Input("basement-radio", "value"),
         Input("ac-radio", "value"),
+        Input("furnishing-tabs", "active_tab")
     ]
 )
 def update_dashboard(price_range, area_range, furnishing, rooms_range, stories_range,
-                     luxury_range, mainroad, guestroom, basement, ac):
+                     luxury_range, mainroad, guestroom, basement, ac, active_tab):
 
     dff = df.copy()
     dff = dff[(dff['price'] >= price_range[0]) & (dff['price'] <= price_range[1])]
@@ -210,21 +241,37 @@ def update_dashboard(price_range, area_range, furnishing, rooms_range, stories_r
         if val != 'All':
             dff = dff[dff[col] == val]
 
+    # Cards' Row
     avg_price = f"${dff['price'].mean():,.0f}" if not dff.empty else "N/A"
     total_properties = f"{len(dff)}" if not dff.empty else "0"
+    luxuryPerc = f"{round((len(dff[dff['luxury_features'] > 2]) / len(dff)) * 100, 2)}" if not dff.empty else "0%"
 
+    # Row 1
+    # -- Price vs Area Scatter plot
     fig_price_area = px.scatter(
         dff, x='area', y='price',  size='luxury_features',
         hover_data=['bedrooms','bathrooms','total_rooms'],
-        title="Price vs Area (size=Luxury Features)"
+        title="Price vs Area"
     )
-
+    
+    # -- Avg price
     avg_price_furnishing = dff.groupby('furnishingstatus')['price'].mean().reset_index()
     fig_furnishing_bar = px.bar(
         avg_price_furnishing, x='furnishingstatus', y='price', color='furnishingstatus',
         title="Average Price by Furnishing Status"
     )
 
+    fig_furnishing_pie = px.pie(
+        dff, names='furnishingstatus', title="Furnishing Status Distribution"
+    )
+
+    if active_tab == "tab-bar":
+        fig_furnishing = fig_furnishing_bar
+    else:
+        fig_furnishing = fig_furnishing_pie
+
+    # Row 2
+    # -- Avg price for Main Road access 
     avg_price_mainroad = dff.groupby('mainroad')['price'].mean().reset_index()
     fig_mainroad_price = px.bar(
         avg_price_mainroad,
@@ -234,10 +281,13 @@ def update_dashboard(price_range, area_range, furnishing, rooms_range, stories_r
         title="Average Price: Main Road Access vs No Main Road"
     )
 
+    # -- No of Bedrooms price distribution
     fig_bedrooms_box = px.box(
         dff, x='bedrooms', y='price', title="Price Distribution by Number of Bedrooms", points=False
     )
 
+    # Row 3
+    # -- Avg Price for each Luxury features count
     luxury_avg_price = dff.groupby('luxury_features')['price'].mean().reset_index()
     luxury_avg_price.columns = ['Luxury Features', 'Average Price']
 
@@ -247,10 +297,10 @@ def update_dashboard(price_range, area_range, furnishing, rooms_range, stories_r
         y='Average Price',
         title="Average Price by Number of Luxury Features",
         color='Average Price',
-        color_continuous_scale='Viridis'
+        color_continuous_scale='Blues'
     )
 
-    
+    # -- Avg price for each story bar plot
     avg_price_stories = dff.groupby('stories')['price'].mean().reset_index()
     avg_price_stories.columns = ['Stories', 'Average Price']
 
@@ -261,9 +311,40 @@ def update_dashboard(price_range, area_range, furnishing, rooms_range, stories_r
         title="Average Price by Number of Stories",
     )
 
+    # Row 4
+    # -- Percentage of Availability of each luxury feature found in houses
+    luxuries = {}
+    for col in ['guestroom', 'basement', 'mainroad', 'hotwaterheating', 'airconditioning', 'prefarea']:
+        if not dff.empty:
+            luxuries[col] = round((dff[col].sum() / len(dff)) * 100, 2)
+        else:
+            luxuries[col] = 0
 
-    return avg_price, total_properties, fig_price_area, fig_furnishing_bar, \
-           fig_mainroad_price, fig_bedrooms_box, fig_luxury_count, fig_price_stories
+    luxuries_df = pd.DataFrame({
+        "Luxuries": luxuries.keys(),
+        "Percentage": luxuries.values()
+    })
+
+    fig_luxuries = px.bar(
+        luxuries_df, x="Luxuries", y="Percentage", color="Luxuries",
+        title="Percentage of Houses with Each Luxury Feature",
+        text="Percentage"
+    )
+    fig_luxuries.update_traces(texttemplate='%{text:.2f}%', textposition="outside")
+
+    # --- Parking Pie
+    if not dff.empty:
+        fig_parking = px.pie(
+            dff, names="parking", title="Parking Slots Distribution"
+        )
+    else:
+        fig_parking = px.pie(
+            names=["No Data"], values=[1], title="Parking Slots Distribution"
+        )
+
+
+    return avg_price, total_properties, luxuryPerc, fig_price_area, fig_furnishing, \
+           fig_mainroad_price, fig_bedrooms_box, fig_luxury_count, fig_price_stories, fig_luxuries, fig_parking
            
 app.layout = dbc.Container([dbc.Row([sidebar, main_content], justify="start")], fluid=True)
 
