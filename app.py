@@ -3,11 +3,37 @@ import pandas as pd
 import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output
 import plotly.express as px
+import json, pickle
+
 
 df = pd.read_csv('assets/Housing_cleaned.csv')
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+# Load model scores (R², MSE)
+with open("assets/model_scores.json", "r") as f:
+    model_scores = json.load(f)
+
+# Load model predictions
+with open("assets/predictions.pkl", "rb") as f:
+    predictions = pickle.load(f)
+
+# Load polynomial errors
+with open("assets/poly_errors.json", "r") as f:
+    poly_errors = json.load(f)
+
+
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "Housing Prices Dashboard"
+
+
+# Main Tabs
+tabs = dbc.Tabs(
+    [
+        dbc.Tab(label="Data Dashboard", tab_id="tab-data"),
+        dbc.Tab(label="ML Models", tab_id="tab-ml"),
+    ],
+    id="main-tabs",
+    active_tab="tab-data",
+)
 
 sidebar = dbc.Col([
     html.H5("Filters", className="text-white mt-3 mb-4", style={"fontFamily": "Segoe UI, sans-serif"}),
@@ -139,7 +165,7 @@ sidebar = dbc.Col([
 })
 
 main_content = dbc.Col([
-    html.H3("🏡 House Prices Dashboard",
+    html.H3("House Prices Dashboard",
             className="text-center mt-3 mb-3",
             style={"fontFamily": "Segoe UI, Roboto, Helvetica, sans-serif",
                    "fontWeight": "bold",
@@ -195,6 +221,35 @@ main_content = dbc.Col([
 
 ], width=9)
 
+ml_content = dbc.Col([
+    html.H3("Machine Learning Model Comparisons", 
+            className="text-center mt-3 mb-3",
+            style={"fontFamily": "Segoe UI, Roboto, Helvetica, sans-serif",
+                   "fontWeight": "bold",
+                   "fontSize": "28px"}),
+
+    dbc.Row([
+        dbc.Col(dbc.Card(dcc.Graph(id="graph-metric-bar"), style={"height": "400px"}), width=6),
+
+        # --- Dropdown + Graph for Actual vs Predicted ---
+        dbc.Col(dbc.Card([
+            dcc.Dropdown(
+                id="dropdown-model-select",
+                options=[{"label": model, "value": model} for model in predictions.keys()],
+                value=list(predictions.keys())[0],  
+                style={"margin": "10px"}
+            ),
+            dcc.Graph(id="graph-actual-vs-pred", style={"height": "330px"})
+        ]), width=6)
+
+    ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col(dbc.Card(dcc.Graph(id="graph-poly-errors"), style={"height": "400px"}), width=6),
+        dbc.Col(dbc.Card(dcc.Graph(id="graph-mse-train-test"), style={"height": "400px"}), width=6),
+    ], className="mb-4"),
+])
+
 @app.callback(
     [
         Output("avg-price", "children"),
@@ -226,6 +281,8 @@ main_content = dbc.Col([
 )
 def update_dashboard(price_range, area_range, furnishing, rooms_range, stories_range,
                      luxury_range, mainroad, guestroom, basement, ac, active_tab):
+
+
 
     dff = df.copy()
     dff = dff[(dff['price'] >= price_range[0]) & (dff['price'] <= price_range[1])]
@@ -345,8 +402,124 @@ def update_dashboard(price_range, area_range, furnishing, rooms_range, stories_r
 
     return avg_price, total_properties, luxuryPerc, fig_price_area, fig_furnishing, \
            fig_mainroad_price, fig_bedrooms_box, fig_luxury_count, fig_price_stories, fig_luxuries, fig_parking
-           
-app.layout = dbc.Container([dbc.Row([sidebar, main_content], justify="start")], fluid=True)
+
+@app.callback(
+    Output("graph-metric-bar", "figure"),
+    Input("main-tabs", "active_tab")
+)
+def update_metric_bar(active_tab):
+    if active_tab != "tab-ml":
+        return dash.no_update
+    
+    df_scores = pd.DataFrame(model_scores).T
+    fig = px.bar(
+        df_scores.reset_index(),
+        x="index", y="R2",
+        title="Model Performance (R² Score)",
+        labels={"index": "Model", "R2": "R² Score"}
+    )
+    return fig
+
+@app.callback(
+    Output("graph-actual-vs-pred", "figure"),
+    Input("main-tabs", "active_tab"),
+    Input("dropdown-model-select", "value")
+)
+def update_actual_vs_pred(active_tab, selected_model):
+    if active_tab != "tab-ml":
+        return dash.no_update
+    
+    if selected_model:
+        vals = predictions[selected_model]
+    else:
+        vals = predictions["linear"]
+    y_true, y_pred = vals["y_true"], vals["y_pred"]
+
+    fig = px.scatter(
+        x=y_true, y=y_pred,
+        labels={"x": "Actual Price", "y": "Predicted Price"},
+        title=f"Actual vs Predicted ({selected_model if selected_model is not None else "linear"})",
+    )
+
+    fig.add_shape(
+        type="line",
+        x0=min(y_true), y0=min(y_true),
+        x1=max(y_true), y1=max(y_true),
+        line=dict(color="red", dash="dash")
+    )
+    
+    return fig
+
+@app.callback(
+    Output("graph-poly-errors", "figure"),
+    Input("main-tabs", "active_tab")
+)
+def update_poly_errors(active_tab):
+    if active_tab != "tab-ml":
+        return dash.no_update
+
+    # Convert dict to dataframe
+    df_poly = pd.DataFrame(poly_errors)
+
+    # Melt so train/test are categories
+    df_poly_melt = df_poly.melt(
+        id_vars=["degree"],
+        value_vars=["train_mse", "test_mse"],
+        var_name="Dataset",
+        value_name="MSE"
+    )
+
+    # Line chart for error vs degree
+    fig = px.line(
+        df_poly_melt,
+        x="degree", y="MSE",
+        color="Dataset",
+        markers=True,
+        title="Polynomial Regression Errors (Train vs Test)",
+    )
+
+    return fig
+
+@app.callback(
+    Output("graph-mse-train-test", "figure"),
+    Input("main-tabs", "active_tab")
+)
+def update_mse_train_test(active_tab):
+    if active_tab != "tab-ml":
+        return dash.no_update
+
+    df_scores = pd.DataFrame(model_scores).T.reset_index()
+    
+    df_mse = df_scores.melt(
+        id_vars=["index"], value_vars=["MSE_Train", "MSE_Test"],
+        var_name="Dataset", value_name="MSE"
+    )
+
+    fig = px.bar(
+        df_mse,
+        x="index", y="MSE", color="Dataset",
+        barmode="group",
+        title="MSE Train vs Test Comparison",
+        labels={'index':"Models"}
+    )
+    return fig
+
+
+app.layout = dbc.Container([
+    html.H2("🏠 Housing Analytics & ML Dashboard", className="text-center mt-4"),
+    tabs,
+    html.Div(id="tab-content")
+], fluid=True)
+
+@app.callback(
+    Output("tab-content", "children"),
+    Input("main-tabs", "active_tab")
+)
+def render_tab(active_tab):
+    if active_tab == "tab-data":
+        return dbc.Row([sidebar, main_content])
+    elif active_tab == "tab-ml":
+        return ml_content
 
 if __name__ == '__main__':
     app.run(debug=True)
